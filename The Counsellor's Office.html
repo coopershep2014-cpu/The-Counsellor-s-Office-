@@ -1,0 +1,1488 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Counsellor’s Office</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        sage: {
+                            50: '#f4f7f4',
+                            100: '#e3eae3',
+                            200: '#c7d5c7',
+                            300: '#9fb59f',
+                            400: '#759075',
+                            500: '#557255',
+                            600: '#425a42',
+                            700: '#364836',
+                            800: '#2d3b2d',
+                            900: '#263126',
+                        },
+                        sand: {
+                            50: '#faf8f5',
+                            100: '#f3efe6',
+                            200: '#e5dccb',
+                            300: '#d4c5a9',
+                            400: '#bfa882',
+                            500: '#ab916b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #faf8f5;
+            color: #2d3b2d;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f3efe6;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c7d5c7;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #9fb59f;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col antialiased selection:bg-sage-200 selection:text-sage-900">
+
+    <!-- Root App Container -->
+    <div id="app" class="flex-1 flex flex-col min-h-screen">
+        <!-- Initial Loading State -->
+        <div id="initial-loader" class="flex-1 flex flex-col items-center justify-center p-6 bg-sand-50">
+            <div class="w-16 h-16 rounded-full bg-sage-100 flex items-center justify-center text-sage-600 mb-4 animate-pulse">
+                <i class="fa-solid fa-seedling text-2xl"></i>
+            </div>
+            <h2 class="text-xl font-semibold text-sage-800 mb-1">The Counsellor’s Office</h2>
+            <p class="text-sm text-sage-600">Preparing your sanctuary...</p>
+        </div>
+    </div>
+
+    <!-- Global Notification Modal / Toast Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Global Custom Modal Container -->
+    <div id="modal-container" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm hidden">
+        <div id="modal-content" class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 transform transition-all">
+            <!-- Modal dynamically rendered -->
+        </div>
+    </div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase handles
+        window.FirebaseSDK = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, 
+            createUserWithEmailAndPassword, signInWithEmailAndPassword,
+            getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, addDoc, getDocs
+        };
+
+        // Initialize App ID & Config
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'counsellors-office-default';
+        window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-key",
+            authDomain: "demo.firebaseapp.com",
+            projectId: "demo-project",
+            storageBucket: "demo.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:12345:web:abcde"
+        };
+
+        // Trigger main app bootstrap
+        if (window.startApp) {
+            window.startApp();
+        }
+    </script>
+
+    <!-- Main Application Script -->
+    <script>
+        // Application State
+        let appState = {
+            user: null,
+            userProfile: null, // { uid, email, role: 'client'|'counsellor', name, phone, bio, emergencyContact }
+            currentView: 'loading', // 'welcome', 'client-dashboard', 'counsellor-dashboard', 'waiting-room'
+            clientSubView: 'overview', // 'overview', 'appointments', 'messages', 'profile'
+            counsellorSubView: 'appointments', // 'appointments', 'clients', 'messages', 'notes', 'settings'
+            appointments: [],
+            messages: [],
+            clientsList: [],
+            counsellorNotes: [],
+            selectedClientUid: null,
+            selectedConversationUid: null,
+            activeWaitingAppointment: null,
+            consultationSettings: { fee: 120, duration: 50, hours: 'Mon-Fri 9AM - 5PM' },
+            loading: false,
+            error: null
+        };
+
+        let db = null;
+        let auth = null;
+        let unsubscribeAppointments = null;
+        let unsubscribeMessages = null;
+        let unsubscribeClients = null;
+        let unsubscribeNotes = null;
+
+        // Toast Helper
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-sage-800 text-white' : type === 'error' ? 'bg-rose-700 text-white' : 'bg-sand-200 text-sage-900';
+            toast.className = `pointer-events-auto px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center space-x-2 transform translate-y-2 opacity-0 transition-all duration-300 ${bgClass}`;
+            
+            const icon = type === 'success' ? 'fa-circle-check' : type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-info';
+            toast.innerHTML = `<i class="fa-solid ${icon}"></i><span>${message}</span>`;
+            
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Custom Modal Helper (Replacing alert/confirm)
+        function showModal(title, bodyHtml, primaryBtnText, onPrimary, secondaryBtnText = 'Cancel', onSecondary = null) {
+            const container = document.getElementById('modal-container');
+            const content = document.getElementById('modal-content');
+            
+            content.innerHTML = `
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-sage-900">${title}</h3>
+                    <button id="modal-close-x" class="text-sage-400 hover:text-sage-600 transition-colors">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+                <div class="text-sage-700 text-sm mb-6">${bodyHtml}</div>
+                <div class="flex items-center justify-end space-x-3">
+                    ${secondaryBtnText ? `<button id="modal-sec-btn" class="px-4 py-2 rounded-xl text-sm font-medium text-sage-700 bg-sand-100 hover:bg-sand-200 transition-colors">${secondaryBtnText}</button>` : ''}
+                    <button id="modal-pri-btn" class="px-4 py-2 rounded-xl text-sm font-medium text-white bg-sage-600 hover:bg-sage-700 transition-colors shadow-sm">${primaryBtnText}</button>
+                </div>
+            `;
+            
+            container.classList.remove('hidden');
+
+            document.getElementById('modal-close-x').onclick = () => container.classList.add('hidden');
+            if (secondaryBtnText && document.getElementById('modal-sec-btn')) {
+                document.getElementById('modal-sec-btn').onclick = () => {
+                    container.classList.add('hidden');
+                    if (onSecondary) onSecondary();
+                };
+            }
+            document.getElementById('modal-pri-btn').onclick = () => {
+                container.classList.add('hidden');
+                if (onPrimary) onPrimary();
+            };
+        }
+
+        // Bootstrap App when SDK ready
+        window.startApp = function() {
+            try {
+                const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore } = window.FirebaseSDK;
+                const app = initializeApp(window.firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Authenticate user
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (token) {
+                    signInWithCustomToken(auth, token).catch(() => signInAnonymously(auth));
+                } else {
+                    signInAnonymously(auth).catch(err => console.error("Anonymous auth error:", err));
+                }
+
+                onAuthStateChanged(auth, async (user) => {
+                    appState.user = user;
+                    if (user) {
+                        await fetchUserProfile(user.uid);
+                    } else {
+                        appState.userProfile = null;
+                        appState.currentView = 'welcome';
+                        render();
+                    }
+                });
+            } catch (e) {
+                console.error("Firebase init error:", e);
+                // Fallback to local offline mode if Firebase fails to load keys
+                appState.currentView = 'welcome';
+                render();
+            }
+        };
+
+        async function fetchUserProfile(uid) {
+            try {
+                const { doc, getDoc, setDoc } = window.FirebaseSDK;
+                const userRef = doc(db, 'artifacts', window.appId, 'public', 'data', 'profiles', uid);
+                const snap = await getDoc(userRef);
+                if (snap.exists()) {
+                    appState.userProfile = snap.data();
+                } else {
+                    // Create default client profile
+                    const defaultProfile = {
+                        uid: uid,
+                        email: appState.user?.email || `client_${uid.substring(0,6)}@sanctuary.com`,
+                        role: 'client',
+                        name: 'New Client',
+                        phone: '+1 (555) 019-2834',
+                        bio: 'Seeking guidance and personal growth.',
+                        emergencyContact: 'Jane Doe (+1 555 999-1122)',
+                        createdAt: new Date().toISOString()
+                    };
+                    await setDoc(userRef, defaultProfile);
+                    appState.userProfile = defaultProfile;
+                }
+
+                // If counsellor account test seed
+                if (appState.userProfile.role === 'counsellor') {
+                    appState.currentView = 'counsellor-dashboard';
+                } else {
+                    appState.currentView = 'client-dashboard';
+                }
+
+                setupRealtimeListeners(uid);
+                render();
+            } catch (err) {
+                console.error("Error fetching profile:", err);
+                appState.currentView = 'client-dashboard';
+                render();
+            }
+        }
+
+        function setupRealtimeListeners(uid) {
+            const { collection, query, where, onSnapshot } = window.FirebaseSDK;
+
+            // Clear previous listeners if any
+            if (unsubscribeAppointments) unsubscribeAppointments();
+            if (unsubscribeMessages) unsubscribeMessages();
+            if (unsubscribeClients) unsubscribeClients();
+            if (unsubscribeNotes) unsubscribeNotes();
+
+            const isCounsellor = appState.userProfile?.role === 'counsellor';
+
+            // Appointments Listener
+            const apptsRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'appointments');
+            unsubscribeAppointments = onSnapshot(apptsRef, (snapshot) => {
+                let list = [];
+                snapshot.forEach(docSnap => {
+                    list.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (!isCounsellor) {
+                    appState.appointments = list.filter(a => a.clientUid === uid);
+                } else {
+                    appState.appointments = list;
+                }
+                render();
+            }, (err) => console.error("Appts listener error:", err));
+
+            // Messages Listener
+            const msgRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'messages');
+            unsubscribeMessages = onSnapshot(msgRef, (snapshot) => {
+                let list = [];
+                snapshot.forEach(docSnap => {
+                    list.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (!isCounsellor) {
+                    appState.messages = list.filter(m => m.clientUid === uid);
+                } else {
+                    appState.messages = list;
+                }
+                render();
+            }, (err) => console.error("Msg listener error:", err));
+
+            if (isCounsellor) {
+                // Clients List
+                const profilesRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'profiles');
+                unsubscribeClients = onSnapshot(profilesRef, (snapshot) => {
+                    let list = [];
+                    snapshot.forEach(docSnap => {
+                        const d = docSnap.data();
+                        if (d.role === 'client') list.push(d);
+                    });
+                    appState.clientsList = list;
+                    render();
+                });
+
+                // Notes
+                const notesRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'notes');
+                unsubscribeNotes = onSnapshot(notesRef, (snapshot) => {
+                    let list = [];
+                    snapshot.forEach(docSnap => {
+                        list.push({ id: docSnap.id, ...docSnap.data() });
+                    });
+                    appState.counsellorNotes = list;
+                    render();
+                });
+            }
+        }
+
+        // Actions
+        async function handleLogin(email, password, roleHint) {
+            const { signInWithEmailAndPassword, createUserWithEmailAndPassword, doc, getDoc, setDoc } = window.FirebaseSDK;
+            try {
+                appState.loading = true;
+                render();
+                let userCred;
+                try {
+                    userCred = await signInWithEmailAndPassword(auth, email, password);
+                } catch (e) {
+                    // If doesn't exist, create it
+                    userCred = await createUserWithEmailAndPassword(auth, email, password);
+                    const userRef = doc(db, 'artifacts', window.appId, 'public', 'data', 'profiles', userCred.user.uid);
+                    const newProfile = {
+                        uid: userCred.user.uid,
+                        email: email,
+                        role: roleHint || 'client',
+                        name: roleHint === 'counsellor' ? 'Dr. Sarah Jenkins, PsyD' : 'Alex Mercer',
+                        phone: '+1 (555) 432-8765',
+                        bio: roleHint === 'counsellor' ? 'Licensed Clinical Psychologist specializing in Cognitive Behavioral Therapy and Mindfulness.' : 'Looking for support with life transitions and stress.',
+                        emergencyContact: 'Emergency Contact Person (+1 555 000-1111)',
+                        createdAt: new Date().toISOString()
+                    };
+                    await setDoc(userRef, newProfile);
+                }
+                showToast("Signed in successfully!", "success");
+            } catch (err) {
+                showToast(err.message, "error");
+                appState.loading = false;
+                render();
+            }
+        }
+
+        async function handleLogout() {
+            const { signOut } = window.FirebaseSDK;
+            await signOut(auth);
+            appState.user = null;
+            appState.userProfile = null;
+            appState.currentView = 'welcome';
+            showToast("Signed out safely.", "info");
+            render();
+        }
+
+        async function createAppointment(date, time, notes) {
+            const { addDoc, collection } = window.FirebaseSDK;
+            try {
+                const apptsRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'appointments');
+                await addDoc(apptsRef, {
+                    clientUid: appState.user.uid,
+                    clientName: appState.userProfile.name,
+                    clientEmail: appState.userProfile.email,
+                    date: date,
+                    time: time,
+                    notes: notes || 'General consultation',
+                    status: 'Pending', // Pending, Confirmed, Completed, Cancelled
+                    createdAt: new Date().toISOString()
+                });
+                showToast("Appointment request submitted successfully!", "success");
+            } catch (err) {
+                showToast("Failed to request appointment: " + err.message, "error");
+            }
+        }
+
+        async function updateAppointmentStatus(appIdVal, newStatus) {
+            const { doc, updateDoc } = window.FirebaseSDK;
+            try {
+                const ref = doc(db, 'artifacts', window.appId, 'public', 'data', 'appointments', appIdVal);
+                await updateDoc(ref, { status: newStatus });
+                showToast(`Appointment status updated to ${newStatus}`, "success");
+            } catch (err) {
+                showToast("Failed to update status: " + err.message, "error");
+            }
+        }
+
+        async function sendMessage(recipientUid, text) {
+            const { addDoc, collection } = window.FirebaseSDK;
+            if (!text.trim()) return;
+            try {
+                const msgRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'messages');
+                const isCounsellor = appState.userProfile.role === 'counsellor';
+                const clientUid = isCounsellor ? recipientUid : appState.user.uid;
+                const senderName = appState.userProfile.name;
+
+                await addDoc(msgRef, {
+                    clientUid: clientUid,
+                    senderUid: appState.user.uid,
+                    senderName: senderName,
+                    senderRole: appState.userProfile.role,
+                    text: text,
+                    timestamp: new Date().toISOString()
+                });
+                showToast("Message sent", "success");
+            } catch (err) {
+                showToast("Failed to send message: " + err.message, "error");
+            }
+        }
+
+        async function saveClientNote(clientUid, noteText) {
+            const { addDoc, collection } = window.FirebaseSDK;
+            if (!noteText.trim()) return;
+            try {
+                const notesRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'notes');
+                await addDoc(notesRef, {
+                    clientUid: clientUid,
+                    counsellorUid: appState.user.uid,
+                    text: noteText,
+                    createdAt: new Date().toISOString()
+                });
+                showToast("Clinical note securely saved", "success");
+            } catch (err) {
+                showToast("Failed to save note: " + err.message, "error");
+            }
+        }
+
+        async function updateProfileData(updatedFields) {
+            const { doc, updateDoc } = window.FirebaseSDK;
+            try {
+                const ref = doc(db, 'artifacts', window.appId, 'public', 'data', 'profiles', appState.user.uid);
+                await updateDoc(ref, updatedFields);
+                appState.userProfile = { ...appState.userProfile, ...updatedFields };
+                showToast("Profile updated successfully", "success");
+                render();
+            } catch (err) {
+                showToast("Failed to update profile: " + err.message, "error");
+            }
+        }
+
+        // Render Controller
+        function render() {
+            const appEl = document.getElementById('app');
+            if (!appEl) return;
+
+            if (appState.currentView === 'loading') {
+                appEl.innerHTML = `
+                    <div class="flex-1 flex flex-col items-center justify-center p-6 bg-sand-50">
+                        <div class="w-16 h-16 rounded-full bg-sage-100 flex items-center justify-center text-sage-600 mb-4 animate-pulse">
+                            <i class="fa-solid fa-seedling text-2xl"></i>
+                        </div>
+                        <h2 class="text-xl font-semibold text-sage-800 mb-1">The Counsellor’s Office</h2>
+                        <p class="text-sm text-sage-600">Loading your safe space...</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (appState.currentView === 'welcome') {
+                appEl.innerHTML = renderWelcomeView();
+                bindWelcomeEvents();
+                return;
+            }
+
+            if (appState.currentView === 'client-dashboard') {
+                appEl.innerHTML = renderClientDashboard();
+                bindClientDashboardEvents();
+                return;
+            }
+
+            if (appState.currentView === 'counsellor-dashboard') {
+                appEl.innerHTML = renderCounsellorDashboard();
+                bindCounsellorDashboardEvents();
+                return;
+            }
+
+            if (appState.currentView === 'waiting-room') {
+                appEl.innerHTML = renderWaitingRoom();
+                bindWaitingRoomEvents();
+                return;
+            }
+        }
+
+        // Views HTML Generators
+        function renderWelcomeView() {
+            return `
+                <div class="min-h-screen flex flex-col bg-sand-50">
+                    <!-- Navigation Header -->
+                    <header class="w-full px-6 py-4 flex items-center justify-between border-b border-sand-200 bg-white/80 backdrop-blur-md sticky top-0 z-40">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 rounded-xl bg-sage-600 flex items-center justify-center text-white shadow-sm">
+                                <i class="fa-solid fa-seedling"></i>
+                            </div>
+                            <span class="font-semibold text-lg text-sage-900 tracking-tight">The Counsellor’s Office</span>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <button id="btn-quick-counsellor-demo" class="text-xs font-medium text-sage-700 bg-sage-100 hover:bg-sage-200 px-3 py-2 rounded-xl transition-colors">
+                                Counsellor Portal Demo
+                            </button>
+                        </div>
+                    </header>
+
+                    <!-- Hero Section -->
+                    <main class="flex-1 flex items-center justify-center p-6">
+                        <div class="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+                            <div class="space-y-6">
+                                <span class="inline-flex items-center space-x-2 bg-sage-100 text-sage-800 text-xs font-semibold px-3 py-1 rounded-full">
+                                    <i class="fa-solid fa-shield-heart text-sage-600"></i>
+                                    <span>Confidential & Professional Care</span>
+                                </span>
+                                <h1 class="text-4xl sm:text-5xl font-bold text-sage-900 leading-tight">
+                                    A peaceful space for your mental wellness.
+                                </h1>
+                                <p class="text-sage-700 text-base leading-relaxed">
+                                    Connect with licensed professionals, request secure sessions, message your counsellor directly, and attend video consultations in a calm, welcoming environment.
+                                </p>
+                                <div class="grid grid-cols-2 gap-4 pt-2">
+                                    <div class="flex items-start space-x-3">
+                                        <div class="w-8 h-8 rounded-lg bg-sage-100 flex items-center justify-center text-sage-700 shrink-0 mt-0.5">
+                                            <i class="fa-solid fa-calendar-check text-sm"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="text-sm font-semibold text-sage-900">Easy Booking</h4>
+                                            <p class="text-xs text-sage-600">Request sessions seamlessly.</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-start space-x-3">
+                                        <div class="w-8 h-8 rounded-lg bg-sage-100 flex items-center justify-center text-sage-700 shrink-0 mt-0.5">
+                                            <i class="fa-solid fa-lock text-sm"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="text-sm font-semibold text-sage-900">Encrypted Notes</h4>
+                                            <p class="text-xs text-sage-600">Strictly confidential records.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Auth Card -->
+                            <div class="bg-white rounded-3xl p-8 shadow-xl border border-sand-200">
+                                <div class="mb-6">
+                                    <h3 class="text-2xl font-bold text-sage-900 mb-1">Welcome Back</h3>
+                                    <p class="text-sm text-sage-600">Sign in to your client account or create one instantly.</p>
+                                </div>
+
+                                <form id="auth-form" class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Email Address</label>
+                                        <input type="email" id="auth-email" required placeholder="alex@example.com" class="w-full px-4 py-3 rounded-xl border border-sand-200 focus:outline-none focus:ring-2 focus:ring-sage-500 text-sm bg-sand-50/50">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Password</label>
+                                        <input type="password" id="auth-password" required placeholder="••••••••" class="w-full px-4 py-3 rounded-xl border border-sand-200 focus:outline-none focus:ring-2 focus:ring-sage-500 text-sm bg-sand-50/50">
+                                    </div>
+                                    <div class="pt-2">
+                                        <button type="submit" class="w-full py-3 rounded-xl bg-sage-600 hover:bg-sage-700 text-white font-medium text-sm transition-colors shadow-sm flex items-center justify-center space-x-2">
+                                            <span>Sign In or Register</span>
+                                            <i class="fa-solid fa-arrow-right text-xs"></i>
+                                        </button>
+                                    </div>
+                                </form>
+
+                                <div class="mt-6 border-t border-sand-200 pt-6 text-center">
+                                    <p class="text-xs text-sage-600 mb-3">Or explore demo roles instantly:</p>
+                                    <div class="flex space-x-2">
+                                        <button id="btn-demo-client" class="flex-1 py-2 px-3 rounded-xl bg-sand-100 hover:bg-sand-200 text-xs font-medium text-sage-800 transition-colors">
+                                            Demo Client
+                                        </button>
+                                        <button id="btn-demo-counsellor" class="flex-1 py-2 px-3 rounded-xl bg-sage-800 hover:bg-sage-900 text-xs font-medium text-white transition-colors">
+                                            Demo Counsellor
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        function renderClientDashboard() {
+            const profile = appState.userProfile || {};
+            const subView = appState.clientSubView;
+
+            return `
+                <div class="min-h-screen flex flex-col bg-sand-50">
+                    <!-- Top Navigation -->
+                    <header class="bg-white border-b border-sand-200 sticky top-0 z-40">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-9 h-9 rounded-xl bg-sage-600 flex items-center justify-center text-white shadow-sm">
+                                    <i class="fa-solid fa-seedling"></i>
+                                </div>
+                                <div>
+                                    <h1 class="text-sm font-bold text-sage-900 leading-tight">The Counsellor’s Office</h1>
+                                    <p class="text-xs text-sage-600">Client Sanctuary</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center space-x-4">
+                                <div class="hidden sm:flex items-center space-x-2 bg-sand-100 px-3 py-1.5 rounded-full">
+                                    <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                    <span class="text-xs font-medium text-sage-800">${profile.name || 'Client'}</span>
+                                </div>
+                                <button id="btn-logout" class="text-sage-600 hover:text-rose-600 text-sm p-2 rounded-xl transition-colors" title="Sign Out">
+                                    <i class="fa-solid fa-right-from-bracket"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <!-- Main Content Layout -->
+                    <div class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-1 lg:grid-cols-4 gap-8">
+                        <!-- Sidebar Navigation -->
+                        <aside class="lg:col-span-1 space-y-2">
+                            <button data-client-tab="overview" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'overview' ? 'bg-sage-600 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-house-chimney w-5"></i>
+                                <span>Overview</span>
+                            </button>
+                            <button data-client-tab="appointments" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'appointments' ? 'bg-sage-600 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-calendar-days w-5"></i>
+                                <span>Appointments & Booking</span>
+                            </button>
+                            <button data-client-tab="messages" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'messages' ? 'bg-sage-600 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-comments w-5"></i>
+                                <span>Direct Messages</span>
+                            </button>
+                            <button data-client-tab="profile" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'profile' ? 'bg-sage-600 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-user-gear w-5"></i>
+                                <span>My Profile</span>
+                            </button>
+                        </aside>
+
+                        <!-- Dynamic Tab Content -->
+                        <main class="lg:col-span-3 space-y-6">
+                            ${subView === 'overview' ? renderClientOverviewTab() : ''}
+                            ${subView === 'appointments' ? renderClientAppointmentsTab() : ''}
+                            ${subView === 'messages' ? renderClientMessagesTab() : ''}
+                            ${subView === 'profile' ? renderClientProfileTab() : ''}
+                        </main>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderClientOverviewTab() {
+            const appointments = appState.appointments || [];
+            const upcoming = appointments.filter(a => a.status === 'Confirmed' || a.status === 'Pending');
+            const nextAppt = upcoming.length > 0 ? upcoming[0] : null;
+
+            return `
+                <div class="space-y-6">
+                    <!-- Greeting Card -->
+                    <div class="bg-gradient-to-br from-sage-700 to-sage-900 rounded-3xl p-8 text-white shadow-lg relative overflow-hidden">
+                        <div class="absolute -right-10 -bottom-10 w-48 h-48 bg-white/5 rounded-full blur-2xl"></div>
+                        <h2 class="text-2xl font-bold mb-2">Welcome back, ${appState.userProfile.name}</h2>
+                        <p class="text-sage-200 text-sm max-w-xl mb-6">
+                            Take a deep breath. Your safe space is here. Review your upcoming sessions or reach out to your counsellor whenever you need support.
+                        </p>
+                        ${nextAppt ? `
+                            <div class="bg-white/10 backdrop-blur-md rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-white/10">
+                                <div>
+                                    <div class="text-xs uppercase tracking-wider text-sage-200 font-semibold mb-1">Next Session</div>
+                                    <div class="text-base font-semibold flex items-center space-x-2">
+                                        <i class="fa-regular fa-clock"></i>
+                                        <span>${nextAppt.date} at ${nextAppt.time}</span>
+                                        <span class="text-xs px-2 py-0.5 rounded-full ${nextAppt.status === 'Confirmed' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">${nextAppt.status}</span>
+                                    </div>
+                                </div>
+                                ${nextAppt.status === 'Confirmed' ? `
+                                    <button data-waiting-room-id="${nextAppt.id}" class="px-4 py-2 rounded-xl bg-white text-sage-900 hover:bg-sage-100 font-medium text-xs transition-colors shadow-sm flex items-center space-x-2">
+                                        <i class="fa-solid fa-video text-sage-600"></i>
+                                        <span>Enter Waiting Room</span>
+                                    </button>
+                                ` : `
+                                    <span class="text-xs text-sage-200 italic">Waiting for counsellor confirmation</span>
+                                `}
+                            </div>
+                        ` : `
+                            <div class="bg-white/10 backdrop-blur-md rounded-2xl p-4 text-sm text-sage-200">
+                                No upcoming sessions scheduled. <a href="#" id="link-to-booking" class="underline font-semibold hover:text-white">Book your first appointment</a>.
+                            </div>
+                        `}
+                    </div>
+
+                    <!-- Quick Stats & Info -->
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-sand-200">
+                            <div class="w-10 h-10 rounded-xl bg-sage-100 flex items-center justify-center text-sage-700 mb-3">
+                                <i class="fa-solid fa-calendar-check"></i>
+                            </div>
+                            <h4 class="text-xl font-bold text-sage-900 mb-1">${appointments.length}</h4>
+                            <p class="text-xs text-sage-600">Total Sessions</p>
+                        </div>
+                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-sand-200">
+                            <div class="w-10 h-10 rounded-xl bg-sage-100 flex items-center justify-center text-sage-700 mb-3">
+                                <i class="fa-solid fa-user-doctor"></i>
+                            </div>
+                            <h4 class="text-lg font-bold text-sage-900 mb-1">Dr. Sarah Jenkins</h4>
+                            <p class="text-xs text-sage-600">Assigned Counsellor</p>
+                        </div>
+                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-sand-200">
+                            <div class="w-10 h-10 rounded-xl bg-sage-100 flex items-center justify-center text-sage-700 mb-3">
+                                <i class="fa-solid fa-shield-halved"></i>
+                            </div>
+                            <h4 class="text-lg font-bold text-sage-900 mb-1">Encrypted</h4>
+                            <p class="text-xs text-sage-600">Privacy Guaranteed</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderClientAppointmentsTab() {
+            const appointments = appState.appointments || [];
+            return `
+                <div class="space-y-6">
+                    <!-- Request Booking Form Card -->
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200">
+                        <h3 class="text-lg font-bold text-sage-900 mb-4 flex items-center space-x-2">
+                            <i class="fa-solid fa-calendar-plus text-sage-600"></i>
+                            <span>Request New Appointment</span>
+                        </h3>
+                        <form id="booking-form" class="space-y-4">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Preferred Date</label>
+                                    <input type="date" id="book-date" required class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Preferred Time</label>
+                                    <select id="book-time" required class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                                        <option value="09:00 AM">09:00 AM</option>
+                                        <option value="10:30 AM">10:30 AM</option>
+                                        <option value="01:00 PM">01:00 PM</option>
+                                        <option value="03:00 PM">03:00 PM</option>
+                                        <option value="04:30 PM">04:30 PM</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Session Topic / Notes for Counsellor</label>
+                                <textarea id="book-notes" rows="3" placeholder="Briefly share what you would like to focus on during this session..." class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50"></textarea>
+                            </div>
+                            <div class="flex justify-end">
+                                <button type="submit" class="px-6 py-2.5 rounded-xl bg-sage-600 hover:bg-sage-700 text-white font-medium text-sm transition-colors shadow-sm">
+                                    Submit Request
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Appointments List -->
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200">
+                        <h3 class="text-lg font-bold text-sage-900 mb-4">Your Appointment History</h3>
+                        ${appointments.length === 0 ? `
+                            <p class="text-sm text-sage-600 py-4 text-center">No appointments requested yet.</p>
+                        ` : `
+                            <div class="space-y-3">
+                                ${appointments.map(a => `
+                                    <div class="p-4 rounded-2xl bg-sand-50 border border-sand-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                                        <div>
+                                            <div class="flex items-center space-x-2 mb-1">
+                                                <span class="font-semibold text-sage-900 text-sm">${a.date} at ${a.time}</span>
+                                                <span class="text-xs px-2.5 py-0.5 rounded-full font-medium ${
+                                                    a.status === 'Confirmed' ? 'bg-emerald-100 text-emerald-800' :
+                                                    a.status === 'Completed' ? 'bg-sage-100 text-sage-800' :
+                                                    a.status === 'Cancelled' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                                                }">${a.status}</span>
+                                            </div>
+                                            <p class="text-xs text-sage-600">Notes: ${a.notes}</p>
+                                        </div>
+                                        ${a.status === 'Confirmed' ? `
+                                            <button data-waiting-room-id="${a.id}" class="px-4 py-2 rounded-xl bg-sage-600 hover:bg-sage-700 text-white font-medium text-xs transition-colors shadow-sm flex items-center space-x-2">
+                                                <i class="fa-solid fa-video"></i>
+                                                <span>Waiting Room</span>
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderClientMessagesTab() {
+            const messages = appState.messages || [];
+            // Sort chronologically
+            messages.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+            return `
+                <div class="bg-white rounded-3xl shadow-sm border border-sand-200 flex flex-col h-[600px]">
+                    <div class="p-4 border-b border-sand-200 flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded-full bg-sage-100 flex items-center justify-center text-sage-700 font-semibold">
+                            SJ
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-sage-900 text-sm">Dr. Sarah Jenkins</h3>
+                            <p class="text-xs text-emerald-600 flex items-center space-x-1">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                                <span>Active Counsellor</span>
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Chat Messages Box -->
+                    <div id="chat-messages-container" class="flex-1 p-4 overflow-y-auto space-y-4 bg-sand-50/50">
+                        ${messages.length === 0 ? `
+                            <div class="text-center py-12 text-sage-500 text-sm">
+                                Send a message to start a confidential conversation with Dr. Jenkins.
+                            </div>
+                        ` : messages.map(m => {
+                            const isMe = m.senderRole === 'client';
+                            return `
+                                <div class="flex flex-col ${isMe ? 'items-end' : 'items-start'}">
+                                    <div class="max-w-md rounded-2xl px-4 py-3 text-sm ${isMe ? 'bg-sage-600 text-white rounded-br-none' : 'bg-white text-sage-900 border border-sand-200 rounded-bl-none shadow-sm'}">
+                                        <p>${m.text}</p>
+                                    </div>
+                                    <span class="text-[10px] text-sage-400 mt-1 px-1">${new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+
+                    <!-- Input Box -->
+                    <div class="p-4 border-t border-sand-200 bg-white rounded-b-3xl">
+                        <form id="chat-form" class="flex items-center space-x-2">
+                            <input type="text" id="chat-input" placeholder="Type a secure message..." autocomplete="off" class="flex-1 px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-sage-600 hover:bg-sage-700 text-white font-medium text-sm transition-colors shadow-sm flex items-center space-x-1">
+                                <span>Send</span>
+                                <i class="fa-solid fa-paper-plane text-xs"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderClientProfileTab() {
+            const p = appState.userProfile || {};
+            return `
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200 space-y-6">
+                    <h3 class="text-lg font-bold text-sage-900 flex items-center space-x-2">
+                        <i class="fa-solid fa-user-pen text-sage-600"></i>
+                        <span>Client Profile & Emergency Information</span>
+                    </h3>
+                    <form id="profile-form" class="space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Full Name</label>
+                                <input type="text" id="prof-name" value="${p.name || ''}" required class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Phone Number</label>
+                                <input type="text" id="prof-phone" value="${p.phone || ''}" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Personal Bio / Goals</label>
+                            <textarea id="prof-bio" rows="3" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">${p.bio || ''}</textarea>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Emergency Contact</label>
+                            <input type="text" id="prof-emergency" value="${p.emergencyContact || ''}" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                        </div>
+                        <div class="flex justify-end">
+                            <button type="submit" class="px-6 py-2.5 rounded-xl bg-sage-600 hover:bg-sage-700 text-white font-medium text-sm transition-colors shadow-sm">
+                                Save Changes
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function renderCounsellorDashboard() {
+            const subView = appState.counsellorSubView;
+            return `
+                <div class="min-h-screen flex flex-col bg-sand-50">
+                    <!-- Counsellor Top Navigation -->
+                    <header class="bg-white border-b border-sand-200 sticky top-0 z-40">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-9 h-9 rounded-xl bg-sage-800 flex items-center justify-center text-white shadow-sm">
+                                    <i class="fa-solid fa-stethoscope"></i>
+                                </div>
+                                <div>
+                                    <h1 class="text-sm font-bold text-sage-900 leading-tight">The Counsellor’s Office</h1>
+                                    <p class="text-xs text-sage-600">Counsellor Professional Dashboard</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center space-x-4">
+                                <span class="hidden sm:inline-block text-xs font-semibold px-3 py-1 rounded-full bg-sage-100 text-sage-800">
+                                    Dr. Sarah Jenkins (Licensed PsyD)
+                                </span>
+                                <button id="btn-logout" class="text-sage-600 hover:text-rose-600 text-sm p-2 rounded-xl transition-colors" title="Sign Out">
+                                    <i class="fa-solid fa-right-from-bracket"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <!-- Main Dashboard Layout -->
+                    <div class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-1 lg:grid-cols-4 gap-8">
+                        <!-- Sidebar Navigation -->
+                        <aside class="lg:col-span-1 space-y-2">
+                            <button data-c-tab="appointments" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'appointments' ? 'bg-sage-800 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-calendar-check w-5"></i>
+                                <span>Appointments & Requests</span>
+                            </button>
+                            <button data-c-tab="clients" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'clients' ? 'bg-sage-800 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-users w-5"></i>
+                                <span>Client Profiles</span>
+                            </button>
+                            <button data-c-tab="messages" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'messages' ? 'bg-sage-800 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-inbox w-5"></i>
+                                <span>Inbox & Messages</span>
+                            </button>
+                            <button data-c-tab="notes" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'notes' ? 'bg-sage-800 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-notes-medical w-5"></i>
+                                <span>Clinical Notes</span>
+                            </button>
+                            <button data-c-tab="settings" class="w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${subView === 'settings' ? 'bg-sage-800 text-white shadow-sm' : 'text-sage-700 hover:bg-sand-100'}">
+                                <i class="fa-solid fa-gear w-5"></i>
+                                <span>Practice Availability</span>
+                            </button>
+                        </aside>
+
+                        <!-- Dynamic Content -->
+                        <main class="lg:col-span-3 space-y-6">
+                            ${subView === 'appointments' ? renderCounsellorAppointmentsTab() : ''}
+                            ${subView === 'clients' ? renderCounsellorClientsTab() : ''}
+                            ${subView === 'messages' ? renderCounsellorMessagesTab() : ''}
+                            ${subView === 'notes' ? renderCounsellorNotesTab() : ''}
+                            ${subView === 'settings' ? renderCounsellorSettingsTab() : ''}
+                        </main>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderCounsellorAppointmentsTab() {
+            const appointments = appState.appointments || [];
+            return `
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200 space-y-6">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-bold text-sage-900">Appointment Requests & Schedule</h3>
+                        <span class="text-xs font-semibold px-3 py-1 rounded-full bg-sage-100 text-sage-800">${appointments.length} Total</span>
+                    </div>
+
+                    ${appointments.length === 0 ? `
+                        <p class="text-sm text-sage-500 py-8 text-center">No appointments booked or pending yet.</p>
+                    ` : `
+                        <div class="space-y-4">
+                            ${appointments.map(a => `
+                                <div class="p-5 rounded-2xl bg-sand-50 border border-sand-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                                    <div class="space-y-1">
+                                        <div class="flex items-center space-x-2">
+                                            <h4 class="font-bold text-sage-900 text-sm">${a.clientName || 'Client'}</h4>
+                                            <span class="text-xs px-2.5 py-0.5 rounded-full font-medium ${
+                                                a.status === 'Confirmed' ? 'bg-emerald-100 text-emerald-800' :
+                                                a.status === 'Completed' ? 'bg-sage-100 text-sage-800' :
+                                                a.status === 'Cancelled' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                                            }">${a.status}</span>
+                                        </div>
+                                        <p class="text-xs font-medium text-sage-700"><i class="fa-regular fa-clock mr-1"></i>${a.date} at ${a.time}</p>
+                                        <p class="text-xs text-sage-600">Client Note: ${a.notes}</p>
+                                        <p class="text-[10px] text-sage-400">Email: ${a.clientEmail}</p>
+                                    </div>
+                                    <div class="flex items-center space-x-2 flex-wrap gap-y-2">
+                                        ${a.status === 'Pending' ? `
+                                            <button data-action-confirm="${a.id}" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors">
+                                                Confirm
+                                            </button>
+                                        ` : ''}
+                                        ${a.status !== 'Completed' && a.status !== 'Cancelled' ? `
+                                            <button data-action-complete="${a.id}" class="px-3 py-1.5 rounded-xl bg-sage-600 hover:bg-sage-700 text-white text-xs font-medium transition-colors">
+                                                Complete
+                                            </button>
+                                        ` : ''}
+                                        ${a.status !== 'Cancelled' ? `
+                                            <button data-action-cancel="${a.id}" class="px-3 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-medium transition-colors">
+                                                Cancel
+                                            </button>
+                                        ` : ''}
+                                        ${a.status === 'Confirmed' ? `
+                                            <button data-waiting-room-id="${a.id}" class="px-3 py-1.5 rounded-xl bg-sage-800 hover:bg-sage-900 text-white text-xs font-medium transition-colors flex items-center space-x-1">
+                                                <i class="fa-solid fa-video text-[10px]"></i>
+                                                <span>Waiting Room</span>
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        function renderCounsellorClientsTab() {
+            const clients = appState.clientsList || [];
+            const selectedUid = appState.selectedClientUid || (clients.length > 0 ? clients[0].uid : null);
+            const selectedClient = clients.find(c => c.uid === selectedUid);
+            const notes = (appState.counsellorNotes || []).filter(n => n.clientUid === selectedUid);
+
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- Client List Column -->
+                    <div class="bg-white rounded-3xl p-4 shadow-sm border border-sand-200 space-y-2 md:col-span-1">
+                        <h3 class="font-bold text-sage-900 text-sm px-2 mb-2">Registered Clients (${clients.length})</h3>
+                        ${clients.length === 0 ? `
+                            <p class="text-xs text-sage-500 p-2">No clients registered yet.</p>
+                        ` : clients.map(c => `
+                            <button data-select-client-uid="${c.uid}" class="w-full text-left p-3 rounded-2xl transition-all ${c.uid === selectedUid ? 'bg-sage-800 text-white shadow-sm' : 'hover:bg-sand-100 text-sage-900'}">
+                                <div class="font-semibold text-sm">${c.name}</div>
+                                <div class="text-xs opacity-80 truncate">${c.email}</div>
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <!-- Client Profile & Notes Detail Column -->
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200 space-y-6 md:col-span-2">
+                        ${selectedClient ? `
+                            <div>
+                                <div class="flex items-center justify-between mb-4">
+                                    <h3 class="text-lg font-bold text-sage-900">${selectedClient.name}</h3>
+                                    <span class="text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">Active Client</span>
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-sage-700 bg-sand-50 p-4 rounded-2xl border border-sand-200">
+                                    <div><span class="font-semibold text-sage-900">Email:</span> ${selectedClient.email}</div>
+                                    <div><span class="font-semibold text-sage-900">Phone:</span> ${selectedClient.phone || 'N/A'}</div>
+                                    <div class="sm:col-span-2"><span class="font-semibold text-sage-900">Bio/Goals:</span> ${selectedClient.bio || 'None provided'}</div>
+                                    <div class="sm:col-span-2"><span class="font-semibold text-sage-900">Emergency Contact:</span> ${selectedClient.emergencyContact || 'None provided'}</div>
+                                </div>
+                            </div>
+
+                            <!-- Private Clinical Notes Section -->
+                            <div class="border-t border-sand-200 pt-6 space-y-4">
+                                <h4 class="font-bold text-sage-900 text-sm flex items-center space-x-2">
+                                    <i class="fa-solid fa-lock text-sage-600"></i>
+                                    <span>Confidential Clinical Notes (Restricted Access)</span>
+                                </h4>
+
+                                <form id="add-note-form" data-note-client-uid="${selectedClient.uid}" class="space-y-3">
+                                    <textarea id="new-note-text" rows="3" placeholder="Add confidential clinical session observations or treatment notes..." class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50" required></textarea>
+                                    <div class="flex justify-end">
+                                        <button type="submit" class="px-4 py-2 rounded-xl bg-sage-800 hover:bg-sage-900 text-white font-medium text-xs transition-colors shadow-sm">
+                                            Save Private Note
+                                        </button>
+                                    </div>
+                                </form>
+
+                                <div class="space-y-3 pt-2">
+                                    ${notes.length === 0 ? `
+                                        <p class="text-xs text-sage-500 italic">No clinical notes recorded for this client yet.</p>
+                                    ` : notes.map(n => `
+                                        <div class="p-3 rounded-xl bg-sand-50 border border-sand-200 text-xs space-y-1">
+                                            <div class="text-sage-400 font-medium">${new Date(n.createdAt).toLocaleString()}</div>
+                                            <p class="text-sage-800">${n.text}</p>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : `
+                            <p class="text-sm text-sage-500 py-12 text-center">Select a client from the list to view profile and notes.</p>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderCounsellorMessagesTab() {
+            const clients = appState.clientsList || [];
+            const messages = appState.messages || [];
+            const selClientUid = appState.selectedConversationUid || (clients.length > 0 ? clients[0].uid : null);
+            const activeClient = clients.find(c => c.uid === selClientUid);
+            const clientMsgs = messages.filter(m => m.clientUid === selClientUid);
+            clientMsgs.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-3 bg-white rounded-3xl shadow-sm border border-sand-200 h-[650px] overflow-hidden">
+                    <!-- Client Conversation Sidebar -->
+                    <div class="border-r border-sand-200 p-4 space-y-2 overflow-y-auto md:col-span-1 bg-sand-50/50">
+                        <h3 class="font-bold text-sage-900 text-xs uppercase tracking-wider mb-3">Conversations</h3>
+                        ${clients.length === 0 ? `
+                            <p class="text-xs text-sage-500">No active client threads.</p>
+                        ` : clients.map(c => `
+                            <button data-select-conv-uid="${c.uid}" class="w-full text-left p-3 rounded-2xl transition-all ${c.uid === selClientUid ? 'bg-sage-800 text-white shadow-sm' : 'hover:bg-sand-100 text-sage-900 bg-white border border-sand-200'}">
+                                <div class="font-semibold text-sm">${c.name}</div>
+                                <div class="text-xs opacity-80 truncate">${c.email}</div>
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <!-- Chat Area -->
+                    <div class="flex flex-col md:col-span-2 h-full">
+                        ${activeClient ? `
+                            <div class="p-4 border-b border-sand-200 flex items-center justify-between bg-white">
+                                <h3 class="font-bold text-sage-900 text-sm">Conversation with ${activeClient.name}</h3>
+                                <span class="text-xs text-sage-500">${activeClient.email}</span>
+                            </div>
+                            <div class="flex-1 p-4 overflow-y-auto space-y-3 bg-sand-50/30">
+                                ${clientMsgs.length === 0 ? `
+                                    <p class="text-xs text-sage-500 text-center py-12">No messages exchanged yet in this thread.</p>
+                                ` : clientMsgs.map(m => {
+                                    const isCounsellorSender = m.senderRole === 'counsellor';
+                                    return `
+                                        <div class="flex flex-col ${isCounsellorSender ? 'items-end' : 'items-start'}">
+                                            <div class="max-w-md rounded-2xl px-4 py-3 text-sm ${isCounsellorSender ? 'bg-sage-800 text-white rounded-br-none' : 'bg-white text-sage-900 border border-sand-200 rounded-bl-none shadow-sm'}">
+                                                <p>${m.text}</p>
+                                            </div>
+                                            <span class="text-[10px] text-sage-400 mt-1 px-1">${new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                            <div class="p-4 border-t border-sand-200 bg-white">
+                                <form id="counsellor-reply-form" data-recipient-uid="${activeClient.uid}" class="flex items-center space-x-2">
+                                    <input type="text" id="counsellor-reply-input" placeholder="Type professional reply..." autocomplete="off" class="flex-1 px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50" required>
+                                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-sage-800 hover:bg-sage-900 text-white font-medium text-sm transition-colors shadow-sm flex items-center space-x-1">
+                                        <span>Reply</span>
+                                        <i class="fa-solid fa-paper-plane text-xs"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        ` : `
+                            <div class="flex-1 flex items-center justify-center p-6 text-sage-500 text-sm">
+                                Select a client conversation from the sidebar.
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderCounsellorNotesTab() {
+            const notes = appState.counsellorNotes || [];
+            const clients = appState.clientsList || [];
+            return `
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200 space-y-6">
+                    <h3 class="text-lg font-bold text-sage-900">All Confidential Clinical Notes Archive</h3>
+                    ${notes.length === 0 ? `
+                        <p class="text-sm text-sage-500 py-8 text-center">No clinical notes recorded yet.</p>
+                    ` : `
+                        <div class="space-y-4">
+                            ${notes.map(n => {
+                                const cl = clients.find(c => c.uid === n.clientUid);
+                                return `
+                                    <div class="p-4 rounded-2xl bg-sand-50 border border-sand-200 space-y-2">
+                                        <div class="flex items-center justify-between">
+                                            <span class="font-bold text-sage-900 text-sm">${cl ? cl.name : 'Unknown Client'}</span>
+                                            <span class="text-xs text-sage-500">${new Date(n.createdAt).toLocaleString()}</span>
+                                        </div>
+                                        <p class="text-xs text-sage-800">${n.text}</p>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        function renderCounsellorSettingsTab() {
+            const s = appState.consultationSettings;
+            return `
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-sand-200 space-y-6">
+                    <h3 class="text-lg font-bold text-sage-900">Practice Availability & Session Settings</h3>
+                    <form id="settings-form" class="space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Standard Session Fee ($)</label>
+                                <input type="number" id="set-fee" value="${s.fee}" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Session Duration (Mins)</label>
+                                <input type="number" id="set-duration" value="${s.duration}" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase tracking-wider text-sage-700 mb-1">Working Hours</label>
+                            <input type="text" id="set-hours" value="${s.hours}" class="w-full px-4 py-2.5 rounded-xl border border-sand-200 text-sm focus:outline-none focus:ring-2 focus:ring-sage-500 bg-sand-50/50">
+                        </div>
+                        <div class="flex justify-end">
+                            <button type="submit" class="px-6 py-2.5 rounded-xl bg-sage-800 hover:bg-sage-900 text-white font-medium text-sm transition-colors shadow-sm">
+                                Save Settings
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function renderWaitingRoom() {
+            const appt = appState.activeWaitingAppointment;
+            return `
+                <div class="min-h-screen flex flex-col bg-slate-900 text-white">
+                    <!-- Top Bar -->
+                    <header class="px-6 py-4 flex items-center justify-between border-b border-slate-800 bg-slate-900/80 backdrop-blur-md">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+                            <span class="font-semibold text-sm">Secure Video Consultation Waiting Room</span>
+                        </div>
+                        <button id="btn-leave-waiting-room" class="px-4 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 text-xs font-medium transition-colors">
+                            Leave Room
+                        </button>
+                    </header>
+
+                    <!-- Main Video Stage / Prototype -->
+                    <main class="flex-1 flex flex-col items-center justify-center p-6 max-w-4xl mx-auto w-full space-y-6">
+                        <div class="w-full aspect-video bg-slate-800 rounded-3xl border border-slate-700 relative overflow-hidden flex flex-col items-center justify-center shadow-2xl">
+                            <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex flex-col justify-end p-6">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h3 class="font-bold text-lg">Session ${appt ? `with ${appState.userProfile.role === 'counsellor' ? appt.clientName : 'Dr. Sarah Jenkins'}` : ''}</h3>
+                                        <p class="text-xs text-slate-300">Encrypted Peer-to-Peer WebRTC Protocol Ready</p>
+                                    </div>
+                                    <div class="flex items-center space-x-3">
+                                        <button id="cam-toggle" class="w-10 h-10 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-white transition-colors" title="Toggle Camera">
+                                            <i class="fa-solid fa-video text-sm"></i>
+                                        </button>
+                                        <button id="mic-toggle" class="w-10 h-10 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-white transition-colors" title="Toggle Microphone">
+                                            <i class="fa-solid fa-microphone text-sm"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="text-center space-y-2">
+                                <div class="w-20 h-20 rounded-full bg-slate-700 flex items-center justify-center text-slate-400 mx-auto text-2xl">
+                                    <i class="fa-solid fa-user-doctor"></i>
+                                </div>
+                                <p class="text-sm text-slate-400">Waiting for participant to join secure channel...</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-800/60 rounded-2xl p-4 border border-slate-700 text-xs text-slate-300 max-w-xl text-center">
+                            Note: This waiting room simulates the secure video consultation environment. For full multi-party WebRTC production calls, integrate an SFU such as Daily.co or Agora.
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        // Event Binding Handlers
+        function bindWelcomeEvents() {
+            document.getElementById('auth-form').onsubmit = (e) => {
+                e.preventDefault();
+                const email = document.getElementById('auth-email').value;
+                const password = document.getElementById('auth-password').value;
+                handleLogin(email, password, 'client');
+            };
+
+            document.getElementById('btn-demo-client').onclick = () => {
+                handleLogin('demo.client@sanctuary.com', 'password123', 'client');
+            };
+
+            document.getElementById('btn-demo-counsellor').onclick = () => {
+                handleLogin('sarah.jenkins@sanctuary.com', 'password123', 'counsellor');
+            };
+
+            document.getElementById('btn-quick-counsellor-demo').onclick = () => {
+                handleLogin('sarah.jenkins@sanctuary.com', 'password123', 'counsellor');
+            };
+        }
+
+        function bindClientDashboardEvents() {
+            document.getElementById('btn-logout').onclick = handleLogout;
+
+            // Sidebar navigation
+            document.querySelectorAll('[data-client-tab]').forEach(btn => {
+                btn.onclick = () => {
+                    appState.clientSubView = btn.getAttribute('data-client-tab');
+                    render();
+                };
+            });
+
+            if (appState.clientSubView === 'overview') {
+                const linkBooking = document.getElementById('link-to-booking');
+                if (linkBooking) {
+                    linkBooking.onclick = (e) => {
+                        e.preventDefault();
+                        appState.clientSubView = 'appointments';
+                        render();
+                    };
+                }
+            }
+
+            if (appState.clientSubView === 'appointments') {
+                const form = document.getElementById('booking-form');
+                if (form) {
+                    form.onsubmit = (e) => {
+                        e.preventDefault();
+                        const date = document.getElementById('book-date').value;
+                        const time = document.getElementById('book-time').value;
+                        const notes = document.getElementById('book-notes').value;
+                        createAppointment(date, time, notes);
+                        form.reset();
+                    };
+                }
+            }
+
+            if (appState.clientSubView === 'messages') {
+                const chatForm = document.getElementById('chat-form');
+                if (chatForm) {
+                    chatForm.onsubmit = (e) => {
+                        e.preventDefault();
+                        const input = document.getElementById('chat-input');
+                        sendMessage(appState.user.uid, input.value);
+                        input.value = '';
+                    };
+                }
+            }
+
+            if (appState.clientSubView === 'profile') {
+                const profForm = document.getElementById('profile-form');
+                if (profForm) {
+                    profForm.onsubmit = (e) => {
+                        e.preventDefault();
+                        updateProfileData({
+                            name: document.getElementById('prof-name').value,
+                            phone: document.getElementById('prof-phone').value,
+                            bio: document.getElementById('prof-bio').value,
+                            emergencyContact: document.getElementById('prof-emergency').value
+                        });
+                    };
+                }
+            }
+
+            // Waiting Room triggers
+            document.querySelectorAll('[data-waiting-room-id]').forEach(btn => {
+                btn.onclick = () => {
+                    const id = btn.getAttribute('data-waiting-room-id');
+                    appState.activeWaitingAppointment = appState.appointments.find(a => a.id === id);
+                    appState.currentView = 'waiting-room';
+                    render();
+                };
+            });
+        }
+
+        function bindCounsellorDashboardEvents() {
+            document.getElementById('btn-logout').onclick = handleLogout;
+
+            document.querySelectorAll('[data-c-tab]').forEach(btn => {
+                btn.onclick = () => {
+                    appState.counsellorSubView = btn.getAttribute('data-c-tab');
+                    render();
+                };
+            });
+
+            if (appState.counsellorSubView === 'appointments') {
+                document.querySelectorAll('[data-action-confirm]').forEach(btn => {
+                    btn.onclick = () => updateAppointmentStatus(btn.getAttribute('data-action-confirm'), 'Confirmed');
+                });
+                document.querySelectorAll('[data-action-complete]').forEach(btn => {
+                    btn.onclick = () => updateAppointmentStatus(btn.getAttribute('data-action-complete'), 'Completed');
+                });
+                document.querySelectorAll('[data-action-cancel]').forEach(btn => {
+                    btn.onclick = () => updateAppointmentStatus(btn.getAttribute('data-action-cancel'), 'Cancelled');
+                });
+            }
+
+            if (appState.counsellorSubView === 'clients') {
+                document.querySelectorAll('[data-select-client-uid]').forEach(btn => {
+                    btn.onclick = () => {
+                        appState.selectedClientUid = btn.getAttribute('data-select-client-uid');
+                        render();
+                    };
+                });
+
+                const noteForm = document.getElementById('add-note-form');
+                if (noteForm) {
+                    noteForm.onsubmit = (e) => {
+                        e.preventDefault();
+                        const clientUid = noteForm.getAttribute('data-note-client-uid');
+                        const text = document.getElementById('new-note-text').value;
+                        saveClientNote(clientUid, text);
+                        document.getElementById('new-note-text').value = '';
+                    };
+                }
+            }
+
+            if (appState.counsellorSubView === 'messages') {
+                document.querySelectorAll('[data-select-conv-uid]').forEach(btn => {
+                    btn.onclick = () => {
+                        appState.selectedConversationUid = btn.getAttribute('data-select-conv-uid');
+                        render();
+                    };
+                });
+
+                const replyForm = document.getElementById('counsellor-reply-form');
+                if (replyForm) {
+                    replyForm.onsubmit = (e) => {
+                        e.preventDefault();
+                        const recipientUid = replyForm.getAttribute('data-recipient-uid');
+                        const input = document.getElementById('counsellor-reply-input');
+                        sendMessage(recipientUid, input.value);
+                        input.value = '';
+                    };
+                }
+            }
+
+            if (appState.counsellorSubView === 'settings') {
+                const sForm = document.getElementById('settings-form');
+                if (sForm) {
+                    sForm.onsubmit = (e) => {
+                        e.preventDefault();
+                        appState.consultationSettings = {
+                            fee: Number(document.getElementById('set-fee').value),
+                            duration: Number(document.getElementById('set-duration').value),
+                            hours: document.getElementById('set-hours').value
+                        };
+                        showToast("Practice settings updated successfully", "success");
+                    };
+                }
+            }
+
+            // Waiting Room triggers
+            document.querySelectorAll('[data-waiting-room-id]').forEach(btn => {
+                btn.onclick = () => {
+                    const id = btn.getAttribute('data-waiting-room-id');
+                    appState.activeWaitingAppointment = appState.appointments.find(a => a.id === id);
+                    appState.currentView = 'waiting-room';
+                    render();
+                };
+            });
+        }
+
+        function bindWaitingRoomEvents() {
+            document.getElementById('btn-leave-waiting-room').onclick = () => {
+                const isCounsellor = appState.userProfile?.role === 'counsellor';
+                appState.currentView = isCounsellor ? 'counsellor-dashboard' : 'client-dashboard';
+                render();
+            };
+
+            const camToggle = document.getElementById('cam-toggle');
+            if (camToggle) {
+                camToggle.onclick = () => {
+                    camToggle.classList.toggle('bg-rose-600');
+                    showToast("Camera toggled", "info");
+                };
+            }
+
+            const micToggle = document.getElementById('mic-toggle');
+            if (micToggle) {
+                micToggle.onclick = () => {
+                    micToggle.classList.toggle('bg-rose-600');
+                    showToast("Microphone toggled", "info");
+                };
+            }
+        }
+    </script>
+</body>
+</html>
